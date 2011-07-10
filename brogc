@@ -1,0 +1,73 @@
+#!/usr/bin/env escript
+%% -*- mode: erlang;erlang-indent-level: 4;indent-tabs-mode: nil -*-
+%% ex: ft=erlang ts=4 sw=4 et
+
+-define(DELIMITER, "----------------------------------------------------------------------------\n").
+
+main([Filename]) ->
+    edit(Filename);
+main([Filename, EditorCmd]) ->
+    edit(Filename, EditorCmd);
+main([]) ->
+    io:format("Ur doin it wrong:~n  ./brogc filename [editor]~n").
+
+edit(Filename) ->
+    edit(Filename, os:getenv("EDITOR")).
+
+edit(_, false) ->
+    io:format("Ur doin it wrong. Define $EDITOR if you're not going to supply one to brogc."),
+    exit(no_editor);
+edit(Filename, EditorCmd) ->
+    EditorCmd1 = string:strip(os:cmd("which "++EditorCmd), both, $\n),
+    case execute_command(EditorCmd1, [Filename]) of
+        {0,_}      ->
+            prompt(Filename, EditorCmd);   
+        {Status,_} ->
+            io:format("Editor exited abnormally with status: ~b~n", [Status])
+    end.
+
+execute_command(Command, Args) when is_list(Command) ->
+    PortSettings = [ {args, Args}, exit_status, nouse_stdio, {line, 1024} ],
+    Port = erlang:open_port({spawn_executable, Command}, PortSettings), execute_command_loop(Port, []).
+
+execute_command_loop(Port, Data) ->
+    receive
+        {Port,{exit_status, ExitStatus}} ->
+            {ExitStatus, lists:reverse(Data)};
+        {Port,{data, NewData}} ->
+            execute_command_loop(Port, [NewData | Data]);
+        Other ->
+            exit({unexpected_message, Other}) 
+    end.
+
+prompt(Filename, EditorCmd) ->
+    io:format(?DELIMITER),
+    case io:get_line("Post? [yes|no] ") of
+        eof ->
+            io:format("EOF");
+        {error, Reason} ->
+            io:format("Error: ~p~n", [Reason]);
+        Input ->
+            case parse(Input) of
+                yes ->
+                    io:format("Saving changes..."),
+                    io:format("done~n");
+                no ->
+                    io:format("Discarded changes~n");
+                nomatch ->
+                    io:format("What? I only understand 'yes' and 'no'. You entered '~p'", [Input]),
+                    prompt(Filename, EditorCmd)
+            end
+    end.
+
+parse(Input) when is_binary(Input) or is_list(Input) ->
+    parse(Input, [{yes, "^\s*yes\s*$"}, {no, "^\s*no\s*$"}]).
+
+parse(_, []) ->
+    nomatch;
+parse(Input, [{Atom, Re}|Rest]) ->
+    case re:run(Input, Re, [caseless, unicode]) of
+        match     -> Atom;
+        {match,_} -> Atom;
+        nomatch   -> parse(Input, Rest)
+    end.
